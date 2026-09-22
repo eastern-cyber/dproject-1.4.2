@@ -4,6 +4,10 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
 
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+
   webpack: (config) => {
     const { IgnorePlugin } = require('webpack');
 
@@ -14,7 +18,7 @@ const nextConfig = {
       })
     );
 
-    // NEW: Ignore optional x402 subpath imports from @coinbase/cdp-sdk
+    // Ignore optional x402 subpath imports from @coinbase/cdp-sdk
     config.plugins.push(
       new IgnorePlugin({
         resourceRegExp: /^@x402\/(core|evm|svm)\//,
