@@ -1,26 +1,26 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  turbopack: undefined, // Disable turbopack
-  
-  experimental: {
-    turbo: {
-      root: __dirname, // Explicit root
-    },
-  },
-  
   typescript: {
     ignoreBuildErrors: true,
   },
-  
+
   webpack: (config) => {
     const { IgnorePlugin } = require('webpack');
-    
+
+    // Existing: suppress thread-stream warning
     config.plugins.push(
       new IgnorePlugin({
         resourceRegExp: /[\\/]thread-stream[\\/]/,
       })
     );
-    
+
+    // NEW: Ignore optional x402 subpath imports from @coinbase/cdp-sdk
+    config.plugins.push(
+      new IgnorePlugin({
+        resourceRegExp: /^@x402\/(core|evm|svm)\//,
+      })
+    );
+
     return config;
   },
 };

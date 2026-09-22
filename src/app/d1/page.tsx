@@ -7,19 +7,18 @@ import dprojectIcon from "@public/DProjectLogo_650x600.svg";
 import Link from 'next/link';
 import WalletConnect from '@/components/WalletConnect';
 import Footer from '@/components/Footer';
-import { defineChain, getContract, toWei, sendTransaction, readContract, prepareContractCall } from "thirdweb";
+import { defineChain, getContract, toWei, sendTransaction, readContract } from "thirdweb";
 import { polygon } from "thirdweb/chains";
 import { client } from "@/lib/client";
 import { useRouter } from 'next/navigation';
 import { ConfirmModal } from '@/components/confirmModal';
-import { privateKeyToAccount } from "thirdweb/wallets";
 
 // ===== ADD THESE CONSTANTS =====
 const KTDFI_SENDER_ADDRESS = "0x778cE5fB24792B79446Fe02a483C86E527e8C295";
 const KTDFI_CONTRACT_ADDRESS = "0x532313164FDCA3ACd2C2900455B208145f269f0e";
 const KTDFI_AMOUNT_D1_MEMBER = "10000"; // 10,000 KTDFI tokens for D1 member
 const KTDFI_AMOUNT_D1_REFERRER = "10000"; // 10,000 KTDFI tokens for referrer bonus
-const KTDFI_SENDER_PRIVATE_KEY = process.env.NEXT_PUBLIC_KTDFI_SENDER_PRIVATE_KEY_D1; // Use different env var for D1
+// 🔄 CHANGED: KTDFI private key now lives server-side in /api/send-ktdfi
 
 // Constants
 const RECIPIENT_ADDRESS = "0x3B16949e2fec02E1f9A2557cE7FEBe74f780fADc";
@@ -137,7 +136,7 @@ export default function PlanB() {
   const [exchangeRateConfig, setExchangeRateConfig] = useState<ExchangeRateConfig>(DEFAULT_CONFIG);
 
   // KTDFI Sender State
-  const [ktdfiSenderAccount, setKtdfiSenderAccount] = useState<any>(null);
+  const [ktdfiSenderReady] = useState<boolean>(true);
 
   // D1 Details Modal States
   const [showD1DetailsModal, setShowD1DetailsModal] = useState(false);
@@ -349,30 +348,6 @@ export default function PlanB() {
     }
   }, [account]);
 
-  // Initialize KTDFI Sender
-  useEffect(() => {
-    const initializeKtdfiSender = async () => {
-      if (!KTDFI_SENDER_PRIVATE_KEY) {
-        console.error("KTDFI sender private key not found in environment variables");
-        setTransactionError("ระบบส่งเหรียญ KTDFI ยังไม่พร้อมใช้งาน");
-        return;
-      }
-
-      try {
-        const senderAccount = privateKeyToAccount({
-          client,
-          privateKey: KTDFI_SENDER_PRIVATE_KEY,
-        });
-        setKtdfiSenderAccount(senderAccount);
-        console.log("KTDFI sender account initialized:", senderAccount.address);
-      } catch (error) {
-        console.error("Failed to initialize KTDFI sender account:", error);
-        setTransactionError("ไม่สามารถตั้งค่าระบบส่งเหรียญ KTDFI ได้");
-      }
-    };
-
-    initializeKtdfiSender();
-  }, []);
 
   // Handle ESC key for modal
   useEffect(() => {
@@ -671,7 +646,7 @@ export default function PlanB() {
 
   // Third Transaction (KTDFI to member)
   const handleThirdTransaction = async () => {
-    if (!account || !firstTxHash || !ktdfiSenderAccount) return;
+    if (!account || !firstTxHash) return;
     
     setIsProcessingThird(true);
     setTransactionError(null);
@@ -679,7 +654,7 @@ export default function PlanB() {
     try {
       let thirdTransactionHash = "";
 
-      const thirdTransaction = await executeKTDFITransaction(account.address, KTDFI_AMOUNT_D1_MEMBER, ktdfiSenderAccount, false);
+      const thirdTransaction = await executeKTDFITransactionViaApi("d1", account.address, KTDFI_AMOUNT_D1_MEMBER, `D1 member bonus for ${account.address}`);
       
       if (!thirdTransaction.success) {
         console.warn('KTDFI transaction to member failed:', thirdTransaction.error);
@@ -709,7 +684,7 @@ export default function PlanB() {
   
   // Fourth Transaction (KTDFI to referrer)
   const handleFourthTransaction = async () => {
-    if (!account || !ktdfiSenderAccount) return;
+    if (!account) return;
     
     setIsProcessingFourth(true);
     setTransactionError(null);
@@ -720,7 +695,7 @@ export default function PlanB() {
       let fourthTransactionError = "";
 
       if (referrerAddress) {
-        const fourthTransaction = await executeKTDFITransaction(referrerAddress, KTDFI_AMOUNT_D1_REFERRER, ktdfiSenderAccount, true);
+        const fourthTransaction = await executeKTDFITransactionViaApi("d1", referrerAddress, KTDFI_AMOUNT_D1_REFERRER, `D1 referrer bonus for ${referrerAddress}`);
         
         if (!fourthTransaction.success) {
           fourthTransactionError = fourthTransaction.error || "Unknown error";
@@ -912,66 +887,36 @@ export default function PlanB() {
   };
 
   // KTDFI Transaction Helper
-  const executeKTDFITransaction = async (to: string, amount: string, ktdfiSenderAccount: any, isReferrerBonus: boolean = false) => {
+
+  // ============================================================
+  // CHANGED: New API-based KTDFI transfer helper.
+  //          Replaces the old client-side executeKTDFITransaction.
+  //          The private key never leaves the server.
+  // ============================================================
+  const executeKTDFITransactionViaApi = async (
+    sender: "d1" | "planA",
+    to: string,
+    amount: string,
+    memo?: string
+  ): Promise<{ success: boolean; transactionHash?: string; error?: string }> => {
     try {
-      if (!ktdfiSenderAccount) {
-        throw new Error("KTDFI sender account not initialized");
+      console.log(`[client] Requesting KTDFI transfer: sender=${sender}, to=${to}, amount=${amount}`);
+      const response = await fetch("/api/send-ktdfi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender, to, amount, memo }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success || !json.txHash) {
+        const message = json.error || `HTTP ${response.status}`;
+        console.error(`[client] KTDFI transfer failed:`, message);
+        return { success: false, error: message };
       }
-
-      // Check KTDFI balance
-      const ktdfiBalance = await readContract({
-        contract: getContract({
-          client,
-          chain: defineChain(polygon),
-          address: KTDFI_CONTRACT_ADDRESS
-        }),
-        method: {
-          type: "function",
-          name: "balanceOf",
-          inputs: [{ type: "address", name: "owner" }],
-          outputs: [{ type: "uint256" }],
-          stateMutability: "view"
-        },
-        params: [KTDFI_SENDER_ADDRESS]
-      });
-
-      const balanceInTokens = Number(ktdfiBalance) / 10**18;
-      const requiredAmount = Number(amount);
-      if (balanceInTokens < requiredAmount) {
-        throw new Error(`Insufficient KTDFI balance. Sender has ${balanceInTokens} KTDFI, but needs ${requiredAmount} KTDFI`);
-      }
-
-      console.log(`Sending ${amount} KTDFI from ${KTDFI_SENDER_ADDRESS} to ${to} ${isReferrerBonus ? '(Referrer Bonus)' : '(Member Bonus)'}`);
-
-      const transaction = prepareContractCall({
-        contract: getContract({
-          client,
-          chain: defineChain(polygon),
-          address: KTDFI_CONTRACT_ADDRESS
-        }),
-        method: {
-          type: "function",
-          name: "transfer",
-          inputs: [
-            { type: "address", name: "to" },
-            { type: "uint256", name: "value" }
-          ],
-          outputs: [{ type: "bool" }],
-          stateMutability: "nonpayable"
-        },
-        params: [to, toWei(amount)]
-      });
-
-      const { transactionHash } = await sendTransaction({
-        transaction,
-        account: ktdfiSenderAccount
-      });
-
-      console.log(`KTDFI transaction successful: ${transactionHash}`);
-      return { success: true, transactionHash, isReferrerBonus };
+      console.log(`[client] KTDFI transfer succeeded: ${json.txHash}`);
+      return { success: true, transactionHash: json.txHash };
     } catch (error) {
-      console.error("KTDFI transaction failed:", error);
-      return { success: false, error: (error as Error).message, isReferrerBonus };
+      console.error("[client] KTDFI transfer threw:", error);
+      return { success: false, error: (error as Error).message };
     }
   };
 
@@ -1513,7 +1458,7 @@ export default function PlanB() {
                   <br />ไปยังกระเป๋าของคุณ
                 </p>
               </div>
-              {!ktdfiSenderAccount && (
+              {!ktdfiSenderReady && (
                 <p className="text-sm text-red-400 mt-2">
                   ⚠️ ระบบส่งเหรียญยังไม่พร้อมใช้งาน
                 </p>
@@ -1530,10 +1475,10 @@ export default function PlanB() {
             <div className="flex flex-col gap-3">
               <button
                 className={`px-6 py-3 rounded-lg font-medium text-[17px] ${
-                  isProcessingThird || !ktdfiSenderAccount ? "bg-gray-600 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 cursor-pointer"
+                  isProcessingThird || !ktdfiSenderReady ? "bg-gray-600 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 cursor-pointer"
                 }`}
                 onClick={handleThirdTransaction}
-                disabled={isProcessingThird || !ktdfiSenderAccount}
+                disabled={isProcessingThird || !ktdfiSenderReady}
               >
                 {isProcessingThird ? 'กำลังส่งเหรียญ...' : 'รับเหรียญ KTDFI'}
               </button>
@@ -1603,7 +1548,7 @@ export default function PlanB() {
                 </p>
               </div>
 
-              {!ktdfiSenderAccount && (
+              {!ktdfiSenderReady && (
                 <p className="text-sm text-red-400 mt-2">
                   ⚠️ ระบบส่งเหรียญยังไม่พร้อมใช้งาน
                 </p>
@@ -1618,10 +1563,10 @@ export default function PlanB() {
             <div className="flex flex-col gap-3">
               <button
                 className={`px-6 py-3 rounded-lg font-medium text-[17px] ${
-                  isProcessingFourth || !ktdfiSenderAccount ? "bg-gray-600 cursor-not-allowed" : "bg-green-600 hover:bg-green-700 cursor-pointer"
+                  isProcessingFourth || !ktdfiSenderReady ? "bg-gray-600 cursor-not-allowed" : "bg-green-600 hover:bg-green-700 cursor-pointer"
                 }`}
                 onClick={handleFourthTransaction}
-                disabled={isProcessingFourth || !ktdfiSenderAccount}
+                disabled={isProcessingFourth || !ktdfiSenderReady}
               >
                 {isProcessingFourth ? 'กำลังส่งโบนัส...' : 'ส่งโบนัสให้ผู้แนะนำ'}
               </button>
