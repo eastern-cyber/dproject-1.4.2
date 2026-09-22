@@ -20,7 +20,6 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
-    "@next/swc-darwin-x64": "15.3.4",
     "@thirdweb-dev/sdk": "^4.0.99",
     "@walletconnect/logger": "^3.0.0",
     "@walletconnect/sign-client": "^2.23.0",
