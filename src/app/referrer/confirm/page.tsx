@@ -8,19 +8,19 @@ import { useEffect, useState } from "react";
 import WalletConnect from "../../../components/WalletConnect";
 import { useActiveAccount } from "thirdweb/react";
 import dprojectIcon from "../../../../public/DProjectLogo_650x600.svg";
-import { defineChain, getContract } from "thirdweb";
+import { defineChain, getContract, toWei, sendTransaction, readContract } from "thirdweb";
 import { polygon } from "thirdweb/chains";
 import Footer from "@/components/Footer";
-import { prepareContractCall, toWei, sendTransaction, readContract } from "thirdweb";
 import { ConfirmModal } from "@/components/confirmModal";
 import { useRouter } from "next/navigation";
-import { privateKeyToAccount } from "thirdweb/wallets";
+// 🔄 CHANGED: Removed `privateKeyToAccount` import — server handles signing.
+// 🔄 CHANGED: Removed `prepareContractCall` import — no client-side contract calls now.
 
 // Constants (will be fetched from GitHub config)
 const RECIPIENT_ADDRESS = "0x3BBf139420A8Ecc2D06c64049fE6E7aE09593944";
 const KTDFI_SENDER_ADDRESS = "0x984395c00E5451437ed47346e6911c2F5CC31ad3";
 const KTDFI_CONTRACT_ADDRESS = "0x532313164FDCA3ACd2C2900455B208145f269f0e";
-const KTDFI_AMOUNT = "1000"; // 1,000 KTDFI tokens
+// 🔄 CHANGED: KTDFI_AMOUNT constant removed — the amount now comes from `selectedMembership.ktdfiBonus`.
 
 // GitHub Raw URL for exchange rate configuration
 const GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/eastern-cyber/dproject-admin-1.0.2/main/public/exchange-rate-config.json";
@@ -57,8 +57,9 @@ const MEMBERSHIP_OPTIONS = [
   }
 ];
 
-// KTDFI Sender Private Key (should be in environment variables)
-const KTDFI_SENDER_PRIVATE_KEY = process.env.NEXT_PUBLIC_KTDFI_SENDER_PRIVATE_KEY;
+// 🔄 CHANGED: Removed `KTDFI_SENDER_PRIVATE_KEY` client reference — the private key
+//              now lives ONLY on the server (env var `KTDFI_SENDER_PRIVATE_KEY`,
+//              no NEXT_PUBLIC_ prefix), used by /api/send-ktdfi.
 
 type UserData = {
   var1: string;
@@ -101,6 +102,16 @@ type ExchangeRateConfig = {
   exchangeRateBuffer: number;
   refreshInterval: number;
 };
+
+// 🔄 CHANGED: Sender kind type matching /api/send-ktdfi
+type SenderKind = "d1" | "planA";
+
+// 🔄 CHANGED: Response shape from /api/send-ktdfi
+interface SendKtdfiApiResponse {
+  success: boolean;
+  txHash?: string;
+  error?: string;
+}
 
 // Exchange rate function - uses the configured fallback rate from GitHub
 const getExchangeRate = async (config: ExchangeRateConfig): Promise<number> => {
@@ -198,7 +209,7 @@ const ConfirmPage = () => {
   const [isMember, setIsMember] = useState(false);
   const [loadingMembership, setLoadingMembership] = useState(false);
   const [transactionError, setTransactionError] = useState<string | null>(null);
-  const [ktdfiSenderAccount, setKtdfiSenderAccount] = useState<any>(null);
+  // 🔄 CHANGED: Removed `ktdfiSenderAccount` state — server handles signing.
   const [selectedMembership, setSelectedMembership] = useState<typeof MEMBERSHIP_OPTIONS[0] | null>(null);
   const [exchangeRateConfig, setExchangeRateConfig] = useState<ExchangeRateConfig>(DEFAULT_CONFIG);
   const account = useActiveAccount();
@@ -209,7 +220,7 @@ const ConfirmPage = () => {
       try {
         setLoading(true);
         const response = await fetch(GITHUB_CONFIG_URL, {
-          cache: 'no-store', // Always fetch fresh config
+          cache: 'no-store',
           headers: {
             'Accept': 'application/json',
           }
@@ -221,7 +232,6 @@ const ConfirmPage = () => {
 
         const config: ExchangeRateConfig = await response.json();
         
-        // Validate config values
         const validatedConfig = {
           fallbackExchangeRate: config.fallbackExchangeRate > 0 ? config.fallbackExchangeRate : DEFAULT_CONFIG.fallbackExchangeRate,
           exchangeRateBuffer: config.exchangeRateBuffer >= 0 ? config.exchangeRateBuffer : DEFAULT_CONFIG.exchangeRateBuffer,
@@ -255,7 +265,6 @@ const ConfirmPage = () => {
         console.log(`Exchange rate updated: ${currentRate} THB/POL (adjusted: ${adjustedRate})`);
       } catch (err) {
         console.error("Failed to get exchange rate:", err);
-        // Use fallback from config even if there's an error
         const fallbackAdjustedRate = Math.max(
           0.01, 
           exchangeRateConfig.fallbackExchangeRate - exchangeRateConfig.exchangeRateBuffer
@@ -271,36 +280,12 @@ const ConfirmPage = () => {
     if (exchangeRateConfig) {
       updateExchangeRate();
       
-      // Set up interval for refreshing based on config
       const interval = setInterval(updateExchangeRate, exchangeRateConfig.refreshInterval);
       return () => clearInterval(interval);
     }
   }, [exchangeRateConfig]);
 
-  // Initialize KTDFI sender account
-  useEffect(() => {
-    const initializeKtdfiSender = async () => {
-      if (!KTDFI_SENDER_PRIVATE_KEY) {
-        console.error("KTDFI sender private key not found in environment variables");
-        setTransactionError("ระบบส่งเหรียญ KTDFI ยังไม่พร้อมใช้งาน");
-        return;
-      }
-
-      try {
-        const senderAccount = privateKeyToAccount({
-          client,
-          privateKey: KTDFI_SENDER_PRIVATE_KEY,
-        });
-        setKtdfiSenderAccount(senderAccount);
-        console.log("KTDFI sender account initialized:", senderAccount.address);
-      } catch (error) {
-        console.error("Failed to initialize KTDFI sender account:", error);
-        setTransactionError("ไม่สามารถตั้งค่าระบบส่งเหรียญ KTDFI ได้");
-      }
-    };
-
-    initializeKtdfiSender();
-  }, []);
+  // 🔄 CHANGED: Removed the entire `initializeKtdfiSender` useEffect — server handles signing now.
 
   // Fetch wallet balance when account changes
   useEffect(() => {
@@ -434,31 +419,24 @@ const ConfirmPage = () => {
     }
   };
 
+  // 🔄 CHANGED: Native POL transfer — uses `sendTransaction({ transaction: { to, value } })`
+  //              instead of `prepareContractCall` on the precompile, matching the D1 page.
   const executeTransaction = async (to: string, amountWei: bigint) => {
     try {
-      const transaction = prepareContractCall({
-        contract: getContract({
-          client,
-          chain: defineChain(polygon),
-          address: "0x0000000000000000000000000000000000001010"
-        }),
-        method: {
-          type: "function",
-          name: "transfer",
-          inputs: [
-            { type: "address", name: "to" },
-            { type: "uint256", name: "value" }
-          ],
-          outputs: [{ type: "bool" }],
-          stateMutability: "payable"
-        },
-        params: [to, amountWei],
-        value: amountWei
-      });
+      if (!account) {
+        return { success: false, error: "No wallet connected" };
+      }
+
+      const transaction = {
+        to: to as `0x${string}`,
+        value: amountWei,
+        chain: defineChain(polygon),
+        client,
+      };
 
       const { transactionHash } = await sendTransaction({
         transaction,
-        account: account!
+        account,
       });
 
       return { success: true, transactionHash };
@@ -468,65 +446,45 @@ const ConfirmPage = () => {
     }
   };
 
-  const executeKTDFITransaction = async (to: string, amount: string) => {
+  // ============================================================
+  // 🔄 CHANGED: KTDFI transfer now goes through /api/send-ktdfi
+  //             with sender="planA". The private key never reaches the browser.
+  // ============================================================
+  const executeKTDFITransactionViaApi = async (
+    sender: SenderKind,
+    to: string,
+    amount: string,
+    memo?: string
+  ): Promise<{ success: boolean; transactionHash?: string; error?: string }> => {
     try {
-      if (!ktdfiSenderAccount) {
-        throw new Error("KTDFI sender account not initialized");
+      console.log(`[client] Requesting KTDFI transfer: sender=${sender}, to=${to}, amount=${amount}`);
+
+      const response = await fetch("/api/send-ktdfi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender, to, amount, memo }),
+      });
+
+      let json: SendKtdfiApiResponse;
+      try {
+        json = await response.json();
+      } catch {
+        return {
+          success: false,
+          error: `Server returned non-JSON response (HTTP ${response.status})`,
+        };
       }
 
-      // Check KTDFI balance first
-      const ktdfiBalance = await readContract({
-        contract: getContract({
-          client,
-          chain: defineChain(polygon),
-          address: KTDFI_CONTRACT_ADDRESS
-        }),
-        method: {
-          type: "function",
-          name: "balanceOf",
-          inputs: [{ type: "address", name: "owner" }],
-          outputs: [{ type: "uint256" }],
-          stateMutability: "view"
-        },
-        params: [KTDFI_SENDER_ADDRESS]
-      });
-
-      const balanceInTokens = Number(ktdfiBalance) / 10**18;
-      if (balanceInTokens < Number(amount)) {
-        throw new Error(`Insufficient KTDFI balance. Sender has ${balanceInTokens} KTDFI, but needs ${amount} KTDFI`);
+      if (!response.ok || !json.success || !json.txHash) {
+        const message = json.error || `HTTP ${response.status}`;
+        console.error(`[client] KTDFI transfer failed:`, message);
+        return { success: false, error: message };
       }
 
-      console.log(`Sending ${amount} KTDFI from ${KTDFI_SENDER_ADDRESS} to ${to}`);
-
-      // KTDFI is an ERC-20 token, so we need to use the transfer function
-      const transaction = prepareContractCall({
-        contract: getContract({
-          client,
-          chain: defineChain(polygon),
-          address: KTDFI_CONTRACT_ADDRESS
-        }),
-        method: {
-          type: "function",
-          name: "transfer",
-          inputs: [
-            { type: "address", name: "to" },
-            { type: "uint256", name: "value" }
-          ],
-          outputs: [{ type: "bool" }],
-          stateMutability: "nonpayable"
-        },
-        params: [to, toWei(amount)] // Convert KTDFI amount to wei (assuming 18 decimals)
-      });
-
-      const { transactionHash } = await sendTransaction({
-        transaction,
-        account: ktdfiSenderAccount // Use the KTDFI sender's account
-      });
-
-      console.log(`KTDFI transaction successful: ${transactionHash}`);
-      return { success: true, transactionHash };
+      console.log(`[client] KTDFI transfer succeeded: ${json.txHash}`);
+      return { success: true, transactionHash: json.txHash };
     } catch (error) {
-      console.error("KTDFI transaction failed:", error);
+      console.error("[client] KTDFI transfer threw:", error);
       return { success: false, error: (error as Error).message };
     }
   };
@@ -549,9 +507,9 @@ const ConfirmPage = () => {
       if (!totalPolAmount) throw new Error("Unable to calculate POL amount");
 
       const totalAmountWei = toWei(totalPolAmount);
-      const seventyPercentWei = BigInt(Math.floor(Number(totalAmountWei) * 0.7));
+      // 🔄 CHANGED: BigInt-safe 70% calculation
+      const seventyPercentWei = (totalAmountWei * 70n) / 100n;
 
-      // Execute first transaction (70% to fixed recipient)
       const firstTransaction = await executeTransaction(RECIPIENT_ADDRESS, seventyPercentWei);
       
       if (!firstTransaction.success) {
@@ -561,7 +519,6 @@ const ConfirmPage = () => {
       setFirstTxHash(firstTransaction.transactionHash!);
       setTransactionStatus(prev => ({ ...prev, firstTransaction: true }));
       
-      // Close first modal and open second modal
       setShowFirstConfirmationModal(false);
       setShowSecondConfirmationModal(true);
 
@@ -584,10 +541,10 @@ const ConfirmPage = () => {
       if (!totalPolAmount) throw new Error("Unable to calculate POL amount");
 
       const totalAmountWei = toWei(totalPolAmount);
-      const seventyPercentWei = BigInt(Math.floor(Number(totalAmountWei) * 0.7));
-      const thirtyPercentWei = BigInt(totalAmountWei) - seventyPercentWei;
+      // 🔄 CHANGED: BigInt-safe 70/30 split
+      const seventyPercentWei = (totalAmountWei * 70n) / 100n;
+      const thirtyPercentWei = totalAmountWei - seventyPercentWei;
 
-      // Execute second transaction (30% to referrer)
       const secondTransaction = await executeTransaction(data.var1, thirtyPercentWei);
       
       if (!secondTransaction.success) {
@@ -597,7 +554,6 @@ const ConfirmPage = () => {
       setSecondTxHash(secondTransaction.transactionHash!);
       setTransactionStatus(prev => ({ ...prev, secondTransaction: true }));
 
-      // Close second modal and open third modal for KTDFI transfer
       setShowSecondConfirmationModal(false);
       setShowThirdConfirmationModal(true);
 
@@ -610,23 +566,29 @@ const ConfirmPage = () => {
   };
 
   const handleThirdTransaction = async () => {
-    if (!account || !firstTxHash || !secondTxHash || !ktdfiSenderAccount || !selectedMembership) return;
+    // 🔄 CHANGED: no longer checks `ktdfiSenderAccount` — server handles signing
+    if (!account || !firstTxHash || !secondTxHash || !selectedMembership) return;
     
     setIsProcessingThird(true);
     setTransactionError(null);
 
     try {
-      // Calculate POL amount first
       const totalPolAmount = calculatePolAmount();
       if (!totalPolAmount) throw new Error("Unable to calculate POL amount");
 
       const totalAmountWei = toWei(totalPolAmount);
-      const seventyPercentWei = BigInt(Math.floor(Number(totalAmountWei) * 0.7));
-      const thirtyPercentWei = BigInt(totalAmountWei) - seventyPercentWei;
+      // 🔄 CHANGED: BigInt-safe split
+      const seventyPercentWei = (totalAmountWei * 70n) / 100n;
+      const thirtyPercentWei = totalAmountWei - seventyPercentWei;
 
-      // Execute third transaction (KTDFI token transfer to new member)
+      // 🔄 CHANGED: KTDFI transfer now goes through the API
       const ktdfiAmount = selectedMembership.ktdfiBonus.toString();
-      const thirdTransaction = await executeKTDFITransaction(account.address, ktdfiAmount);
+      const thirdTransaction = await executeKTDFITransactionViaApi(
+        "planA",
+        account.address,
+        ktdfiAmount,
+        `Plan A membership bonus - ${selectedMembership.name}`
+      );
       
       if (!thirdTransaction.success) {
         throw new Error(`KTDFI transaction failed: ${thirdTransaction.error}`);
@@ -635,7 +597,6 @@ const ConfirmPage = () => {
       setThirdTxHash(thirdTransaction.transactionHash!);
       setTransactionStatus(prev => ({ ...prev, thirdTransaction: true }));
 
-      // Get current time in Bangkok timezone
       const now = new Date();
       const formattedDate = now.toLocaleString('en-GB', {
         timeZone: 'Asia/Bangkok',
@@ -648,7 +609,6 @@ const ConfirmPage = () => {
         hour12: false
       }).replace(',', '');
 
-      // Store report in IPFS (optional - will continue even if it fails)
       let ipfsHash = null;
       let ipfsLink = "N/A";
 
@@ -697,10 +657,8 @@ const ConfirmPage = () => {
         }
       } catch (ipfsError) {
         console.warn("IPFS storage failed, but continuing with database update:", ipfsError);
-        // Continue with database update even if IPFS fails
       }
 
-      // Add user to PostgreSQL database (this will happen even if IPFS fails)
       const newUser: DatabaseUserData = {
         user_id: account.address,
         referrer_id: data!.var1,
@@ -725,7 +683,6 @@ const ConfirmPage = () => {
       setIsTransactionComplete(true);
       setShowThirdConfirmationModal(false);
       
-      // Redirect to user page after successful completion
       router.push(`/users/${account.address}`);
 
     } catch (err) {
@@ -737,29 +694,20 @@ const ConfirmPage = () => {
   };
 
   const handleCloseFirstModal = () => {
-    if (transactionStatus.firstTransaction) {
-      // If first transaction is already completed, don't allow closing
-      return;
-    }
+    if (transactionStatus.firstTransaction) return;
     setShowFirstConfirmationModal(false);
     setSelectedMembership(null);
     setTransactionError(null);
   };
 
   const handleCloseSecondModal = () => {
-    if (transactionStatus.secondTransaction) {
-      // If second transaction is already completed, don't allow closing
-      return;
-    }
+    if (transactionStatus.secondTransaction) return;
     setShowSecondConfirmationModal(false);
     setTransactionError(null);
   };
 
   const handleCloseThirdModal = () => {
-    if (transactionStatus.thirdTransaction) {
-      // If third transaction is already completed, don't allow closing
-      return;
-    }
+    if (transactionStatus.thirdTransaction) return;
     setShowThirdConfirmationModal(false);
     setTransactionError(null);
   };
@@ -825,16 +773,17 @@ const ConfirmPage = () => {
             </button>
           )}
         </div>
-        <p className="text-center text-[18px] text-gray-200">
+        {/* 🔄 CHANGED: Fixed <p> nesting — outer <p> replaced with <div>, inner <p> kept */}
+        <div className="text-center text-[18px] text-gray-200">
           <p>
-          เพื่อสนับสนุน <b>แอพพลิเคชั่น <span className="text-[26px] text-red-600">ก๊อกๆๆ</span></b> <br />
-          ถือเป็นการยืนยันสถานภาพ
+            เพื่อสนับสนุน <b>แอพพลิเคชั่น <span className="text-[26px] text-red-600">ก๊อกๆๆ</span></b> <br />
+            ถือเป็นการยืนยันสถานภาพ
           </p>
           <span className="text-yellow-500 text-[22px]">
             <b>&quot;สมาชิกพรีเมี่ยม&quot;</b>
           </span><br />
           ภายใต้การแนะนำของ<br />
-        </p>
+        </div>
         {data && (
           <div className="text-center text-[18px] text-gray-300 bg-gray-900 p-4 border border-zinc-300 rounded-lg">
             <p className="text-lg text-gray-300">
@@ -881,7 +830,6 @@ const ConfirmPage = () => {
             <div className="flex flex-col items-center justify-center w-full p-2 m-2">
               <PaymentButton />
               
-              {/* Membership Selection Modal */}
               <MembershipSelectionModal
                 isOpen={showMembershipSelection}
                 onClose={handleCloseMembershipModal}
@@ -890,7 +838,6 @@ const ConfirmPage = () => {
                 exchangeRate={exchangeRate}
               />
 
-              {/* First Confirmation Modal - Cannot be closed if transaction is in progress or completed */}
               {showFirstConfirmationModal && selectedMembership && (
                 <ConfirmModal 
                   onClose={handleCloseFirstModal}
@@ -961,7 +908,6 @@ const ConfirmPage = () => {
                 </ConfirmModal>
               )}
 
-              {/* Second Confirmation Modal - Cannot be closed if transaction is in progress or completed */}
               {showSecondConfirmationModal && (
                 <ConfirmModal 
                   onClose={handleCloseSecondModal}
@@ -1021,7 +967,6 @@ const ConfirmPage = () => {
                 </ConfirmModal>
               )}
 
-              {/* Third Confirmation Modal - KTDFI Token Transfer */}
               {showThirdConfirmationModal && (
                 <ConfirmModal 
                   onClose={handleCloseThirdModal}
@@ -1056,11 +1001,6 @@ const ConfirmPage = () => {
                           <br />ไปยังกระเป๋าของคุณ
                         </p>
                       </div>
-                      {!ktdfiSenderAccount && (
-                        <p className="text-sm text-red-400 mt-2">
-                          ⚠️ ระบบส่งเหรียญยังไม่พร้อมใช้งาน
-                        </p>
-                      )}
                       <p className="text-sm text-green-400 mt-4">
                         ✅ การโอนค่าสมาชิกทั้ง 2 ครั้งสำเร็จแล้ว
                       </p>
@@ -1073,10 +1013,10 @@ const ConfirmPage = () => {
                     <div className="flex flex-col gap-3">
                       <button
                         className={`px-6 py-3 rounded-lg font-medium text-[17px] ${
-                          isProcessingThird || !ktdfiSenderAccount ? "bg-gray-600 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 cursor-pointer"
+                          isProcessingThird ? "bg-gray-600 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 cursor-pointer"
                         }`}
                         onClick={handleThirdTransaction}
-                        disabled={isProcessingThird || !ktdfiSenderAccount}
+                        disabled={isProcessingThird}
                       >
                         {isProcessingThird ? 'กำลังส่งเหรียญ...' : 'รับเหรียญ KTDFI'}
                       </button>

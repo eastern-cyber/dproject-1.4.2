@@ -62,14 +62,14 @@ export default function Home() {
                 <p className="text-xl font-bold text-center">
                   ยินดีต้อนรับสู่ DProject
                 </p>
-                <p className="mt-5 w-full">
+                <div className="mt-5 w-full">
                   <Link 
                     href="/member-area"
                     className="flex flex-col border bg-zinc-800 border-zinc-500 px-4 py-3 rounded-lg hover:bg-[#6890000] transition-colors hover:border-zinc-300 w-full text-center"
                   >
-                    <p className="text-lg break-words">เข้าสู่พื้นที่สมาชิก</p>
+                    <span className="text-lg break-words block">เข้าสู่พื้นที่สมาชิก</span>
                   </Link>
-                </p>
+                </div>
               </div>
             </div>
           )}
