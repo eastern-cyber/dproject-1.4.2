@@ -609,7 +609,7 @@ export default function PlanB() {
     }
   };
 
-  // Second Transaction
+  // Second Transaction (referrer bonus — ALWAYS paid by the KTDFI sender wallet)
   const handleSecondTransaction = async () => {
     if (!account || !adjustedExchangeRate || !userData || !firstTxHash) return;
     
@@ -618,27 +618,53 @@ export default function PlanB() {
 
     try {
       const referrerAddress = getValidReferrerAddress();
-      let secondTransactionHash = "";
 
-      if (referrerAddress) {
-        const minimumAmountWei = toWei(MINIMUM_PAYMENT.toString());
-        const secondTransaction = await executeTransaction(referrerAddress, minimumAmountWei);
-        
-        if (!secondTransaction.success) {
-          console.warn('Second transaction failed, but continuing:', secondTransaction.error);
-        } else {
-          secondTransactionHash = secondTransaction.transactionHash!;
-          setSecondTxHash(secondTransactionHash);
-          setTransactionStatus(prev => ({ ...prev, secondTransaction: true }));
-        }
+      // If no valid referrer, skip Tx 2 and continue to Tx 3
+      if (!referrerAddress) {
+        console.log('No valid referrer — skipping Tx 2');
+        setTransactionStatus(prev => ({ ...prev, secondTransaction: true }));
+        setShowSecondConfirmationModal(false);
+        setShowThirdConfirmationModal(true);
+        return;
       }
+
+      // ---- Calculate referrer bonus ----
+      // Full membership fee in POL at the live exchange rate
+      const fullFeePol = MEMBERSHIP_FEE_THB / adjustedExchangeRate;   // e.g. 800/3.54 = 225.9887
+      
+      // Internally: 15% of full fee (20% referral bonus minus 25% income tax withheld)
+      const referrerBonusPol = fullFeePol * 0.15;                     // e.g. 33.8983
+      
+      // Format to 6 decimals for the API (avoids floating-point artifacts)
+      const referrerBonusStr = referrerBonusPol.toFixed(6);
+
+      console.log(`[Tx 2] Referrer bonus: ${referrerBonusStr} POL (from full fee ${fullFeePol.toFixed(6)} POL, 15% net)`);
+
+      // ---- Send from the KTDFI sender wallet via the new API ----
+      const secondTransaction = await executePolFromSenderViaApi(
+        "d1",
+        referrerAddress,
+        referrerBonusStr,
+        `D1 referrer bonus for ${referrerAddress}`
+      );
+
+      if (!secondTransaction.success) {
+        // FAILURE: stop the flow, show error to user, do NOT proceed
+        console.error('Tx 2 failed — stopping the flow:', secondTransaction.error);
+        setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
+        return;
+      }
+
+      // ---- Success: record tx hash and continue ----
+      setSecondTxHash(secondTransaction.transactionHash!);
+      setTransactionStatus(prev => ({ ...prev, secondTransaction: true }));
 
       setShowSecondConfirmationModal(false);
       setShowThirdConfirmationModal(true);
 
     } catch (err) {
       console.error("Second transaction failed:", err);
-      setTransactionError(`การทำรายการล้มเหลว: ${(err as Error).message}`);
+      setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
     } finally {
       setIsProcessingSecond(false);
     }
@@ -652,21 +678,27 @@ export default function PlanB() {
     setTransactionError(null);
 
     try {
-      let thirdTransactionHash = "";
+      const thirdTransaction = await executeKTDFITransactionViaApi(
+        "d1",
+        account.address,
+        KTDFI_AMOUNT_D1_MEMBER,
+        `D1 member bonus for ${account.address}`
+      );
 
-      const thirdTransaction = await executeKTDFITransactionViaApi("d1", account.address, KTDFI_AMOUNT_D1_MEMBER, `D1 member bonus for ${account.address}`);
-      
+      // ---- Failure: stop the flow ----
       if (!thirdTransaction.success) {
-        console.warn('KTDFI transaction to member failed:', thirdTransaction.error);
-        setTransactionError(`การส่งเหรียญ KTDFI ให้สมาชิกล้มเหลว: ${thirdTransaction.error}. จะดำเนินการต่อไป`);
-      } else {
-        thirdTransactionHash = thirdTransaction.transactionHash!;
-        setThirdTxHash(thirdTransactionHash);
-        setTransactionStatus(prev => ({ ...prev, thirdTransaction: true }));
+        console.error('Tx 3 failed — stopping the flow:', thirdTransaction.error);
+        setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
+        return;
       }
 
+      // ---- Success: record tx hash and continue ----
+      const thirdTransactionHash = thirdTransaction.transactionHash!;
+      setThirdTxHash(thirdTransactionHash);
+      setTransactionStatus(prev => ({ ...prev, thirdTransaction: true }));
+
       setShowThirdConfirmationModal(false);
-      
+
       const referrerAddress = getValidReferrerAddress();
       if (referrerAddress) {
         setShowFourthConfirmationModal(true);
@@ -676,7 +708,7 @@ export default function PlanB() {
 
     } catch (err) {
       console.error("Third transaction failed:", err);
-      setTransactionError(`การทำรายการล้มเหลว: ${(err as Error).message}`);
+      setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
     } finally {
       setIsProcessingThird(false);
     }
@@ -691,28 +723,39 @@ export default function PlanB() {
 
     try {
       const referrerAddress = getValidReferrerAddress();
-      let fourthTransactionHash = "";
-      let fourthTransactionError = "";
 
-      if (referrerAddress) {
-        const fourthTransaction = await executeKTDFITransactionViaApi("d1", referrerAddress, KTDFI_AMOUNT_D1_REFERRER, `D1 referrer bonus for ${referrerAddress}`);
-        
-        if (!fourthTransaction.success) {
-          fourthTransactionError = fourthTransaction.error || "Unknown error";
-          console.warn('KTDFI transaction to referrer failed:', fourthTransactionError);
-          setTransactionError(`การส่งเหรียญ KTDFI ให้ผู้แนะนำล้มเหลว: ${fourthTransactionError}. แต่จะบันทึกข้อมูลลงฐานข้อมูล`);
-        } else {
-          fourthTransactionHash = fourthTransaction.transactionHash!;
-          setFourthTxHash(fourthTransactionHash);
-          setTransactionStatus(prev => ({ ...prev, fourthTransaction: true }));
-        }
+      // If no referrer, skip Tx 4 and proceed to DB update
+      if (!referrerAddress) {
+        console.log('No valid referrer — skipping Tx 4');
+        setTransactionStatus(prev => ({ ...prev, fourthTransaction: true }));
+        await handleDatabaseUpdate(thirdTxHash, "");
+        return;
       }
+
+      const fourthTransaction = await executeKTDFITransactionViaApi(
+        "d1",
+        referrerAddress,
+        KTDFI_AMOUNT_D1_REFERRER,
+        `D1 referrer bonus for ${referrerAddress}`
+      );
+
+      // ---- Failure: stop the flow ----
+      if (!fourthTransaction.success) {
+        console.error('Tx 4 failed — stopping the flow:', fourthTransaction.error);
+        setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
+        return;
+      }
+
+      // ---- Success: record tx hash and proceed to DB update ----
+      const fourthTransactionHash = fourthTransaction.transactionHash!;
+      setFourthTxHash(fourthTransactionHash);
+      setTransactionStatus(prev => ({ ...prev, fourthTransaction: true }));
 
       await handleDatabaseUpdate(thirdTxHash, fourthTransactionHash);
 
     } catch (err) {
       console.error("Fourth transaction failed:", err);
-      setTransactionError(`การทำรายการล้มเหลว: ${(err as Error).message}`);
+      setTransactionError("ขออภัย ระบบขัดข้อง กรุณาติดต่อผู้ดูแลระบบ!");
     } finally {
       setIsProcessingFourth(false);
     }
@@ -766,9 +809,16 @@ export default function PlanB() {
           net_bonus_used: bonusToUse,
           total_bonus_used_cumulative: totalUsedBonusCumulative,
           referrer_transaction: referrerAddress ? {
-            amount: MINIMUM_PAYMENT,
+            amount: parseFloat(((MEMBERSHIP_FEE_THB / adjustedExchangeRate) * 0.15).toFixed(6)),
+            amount_full_fee_pol: parseFloat((MEMBERSHIP_FEE_THB / adjustedExchangeRate).toFixed(6)),
+            rate_thb_pol: parseFloat(adjustedExchangeRate.toFixed(4)),
             tx_hash: secondTxHash,
-            date_time: formattedDate
+            date_time: formattedDate,
+            sender_wallet: KTDFI_SENDER_ADDRESS,
+            recipient: referrerAddress,
+            payer: "sender_wallet",
+            type: "referrer_bonus_pol",
+            note: "20% referral bonus; 25% income tax withheld (net = 15%)"
           } : null,
           ktdfi_to_member: memberKtdfiTxHash ? {
             amount: KTDFI_AMOUNT_D1_MEMBER,
@@ -916,6 +966,38 @@ export default function PlanB() {
       return { success: true, transactionHash: json.txHash };
     } catch (error) {
       console.error("[client] KTDFI transfer threw:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  };
+
+  // ============================================================
+  // NEW: API-based POL transfer from the sender wallet.
+  //      Used for the referrer bonus in Tx 2 — the member never
+  //      pays this; the KTDFI sender wallet always does.
+  // ============================================================
+  const executePolFromSenderViaApi = async (
+    sender: "d1" | "planA",
+    to: string,
+    amount: string,
+    memo?: string
+  ): Promise<{ success: boolean; transactionHash?: string; error?: string }> => {
+    try {
+      console.log(`[client] Requesting POL transfer from sender: sender=${sender}, to=${to}, amount=${amount}`);
+      const response = await fetch("/api/send-pol", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender, to, amount, memo }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success || !json.txHash) {
+        const message = json.error || `HTTP ${response.status}`;
+        console.error(`[client] POL transfer from sender failed:`, message);
+        return { success: false, error: message };
+      }
+      console.log(`[client] POL transfer from sender succeeded: ${json.txHash}`);
+      return { success: true, transactionHash: json.txHash };
+    } catch (error) {
+      console.error("[client] POL transfer from sender threw:", error);
       return { success: false, error: (error as Error).message };
     }
   };
@@ -1160,7 +1242,7 @@ export default function PlanB() {
                     <div>โบนัสทั้งหมด (PR+CR+RT+AR):</div>
                     <div className="text-right">{formatNumber(totalBonus)} POL</div>
                     
-                    <div>5% ที่ใช้ได้:</div>
+                    <div>5% ที่ได้มาทั้งหมด:</div>
                     <div className="text-right">{formatNumber(netBonus)} POL</div>
                     
                     {isPlanB && (
@@ -1225,6 +1307,24 @@ export default function PlanB() {
                       (อัปเดตล่าสุดจากระบบกลาง)
                     </span>
                   )}
+                </p>
+                <p className="text-sm text-gray-200 mt-2">
+                  ค่าสมาชิก Plan B D1: {MEMBERSHIP_FEE_THB} THB ≈{" "}
+                  <span className="text-blue-300 font-semibold">
+                    {(MEMBERSHIP_FEE_THB / adjustedExchangeRate).toFixed(4)} POL
+                  </span>
+                </p>
+                <p className="text-sm text-gray-200 mt-1">
+                  5% โบนัสสะสมที่ใช้ได้:{" "}
+                  <span className="text-green-400 font-semibold">
+                    {formatNumber(remainingBonus)} POL
+                  </span>
+                </p>
+                <p className="text-sm text-gray-200 mt-1">
+                  ต้องชำระจริง:{" "}
+                  <span className="text-yellow-400 font-semibold">
+                    {formatNumber(calculateRequiredPolAmount())} POL
+                  </span>
                 </p>
               </div>
             )}
@@ -1375,15 +1475,38 @@ export default function PlanB() {
             <h3 className="text-xl font-bold mb-4 text-center">ยืนยันการโอนให้ผู้แนะนำ</h3>
             <div className="mb-6 text-center">
               <p className="text-[18px] text-gray-200">
-                โอนค่าสมาชิกส่วนที่ 2<br />
+                โบนัสผู้แนะนำ Plan B<br />
                 <span className="text-yellow-500 text-[22px] font-bold">
-                  {MINIMUM_PAYMENT} POL
+                  PR Bonus 20%
                 </span>
                 <p className="text-[16px] mt-2 text-gray-200">ไปยังผู้แนะนำ</p>
               </p>
-              
+
+              {adjustedExchangeRate && (
+                <div className="mt-4 p-3 bg-gray-800 rounded-lg space-y-2 text-[16px]">
+                  <div className="flex justify-between items-center text-gray-200">
+                    <span>โบนัสผู้แนะนำ 20%:</span>
+                    <span className="text-yellow-400 font-semibold">
+                      {((MEMBERSHIP_FEE_THB / adjustedExchangeRate) * 0.20).toFixed(4)} POL
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-gray-300">
+                    <span>ยอดสะสม:</span>
+                    <span className="font-semibold">
+                      {((MEMBERSHIP_FEE_THB / adjustedExchangeRate) * 0.05).toFixed(4)} POL
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-gray-100 border-t border-gray-700 pt-2">
+                    <span>โบนัสสุทธิ:</span>
+                    <span className="text-green-400 font-bold">
+                      {((MEMBERSHIP_FEE_THB / adjustedExchangeRate) * 0.15).toFixed(4)} POL
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {userData?.referrer_id && (
-                <p className="text-sm text-gray-300 mt-2">
+                <p className="text-sm text-gray-300 mt-3">
                   ผู้แนะนำ: {formatAddressForDisplay(userData.referrer_id)}
                 </p>
               )}
