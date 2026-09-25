@@ -1179,11 +1179,10 @@ export default function PlanB() {
             style={{ filter: "drop-shadow(0px 0px 24px #a726a9a8" }}
           />
         </Link>
-
+        <p className="pt-2">Version 1.4.2</p>
         <h1 className="p-4 text-1xl md:text-3xl text-2xl font-semibold md:font-bold tracking-tighter">
           ยืนยันการเข้าร่วม Plan B D1
         </h1>
-        
         <div className="flex justify-center mb-2">
           <WalletConnect />
         </div>

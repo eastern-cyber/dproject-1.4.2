@@ -55,7 +55,10 @@ export default function Home() {
               filter: "drop-shadow(0px 0px 24px #a726a9a8)",
             }}
           />
+          <p className="pt-2">Version 1.4.2</p>
+          <div className="flex justify-center mb-2">
           <WalletConnect />
+          </div>
           {contractMetadata && (
             <div className="flex flex-col items-center justify-center p-5 mt-2 w-full">
               <div className="flex flex-col items-center justify-center mt-2 w-full">
