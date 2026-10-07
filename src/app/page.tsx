@@ -137,7 +137,7 @@ function ThirdwebResources() {
 
         <ArticleCard
           title="ต้นแบบ Application ก๊อกๆๆ"
-          href="https://v228.3kok.app/"
+          href="https://3kok.dfi.fund/"
           description="3K หรือ KokKokKok จะต่อยอดจาก SocialApp ยอดนิยม"
         />
 
