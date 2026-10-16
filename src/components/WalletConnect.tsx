@@ -6,22 +6,29 @@ import { ConnectButton, darkTheme } from "thirdweb/react";
 import { chain } from "@/lib/chain";
 import { client } from "@/lib/client";
 import React from "react";
-import { createWallet } from "thirdweb/wallets";
+import {
+    inAppWallet,
+    createWallet,
+} from "thirdweb/wallets";
 
 const WalletConnect: React.FC = () => {
-    const wallets = [
-        createWallet("io.metamask"),
-        createWallet("com.trustwallet.app"),
-        createWallet("com.bitget.web3"),
-    ];
-
     return (
         <div className="flex justify-center m-5">
             <ConnectButton 
                 locale={"en_US"} 
                 client={client}
                 chain={chain}
-                wallets={wallets}
+                wallets={[ inAppWallet ({
+                auth: {
+                    options: [
+                        "email",
+                    ]
+                    }
+                }), 
+                        createWallet("io.metamask"), // This is how you add MetaMask
+                        createWallet("com.trustwallet.app"),
+                        createWallet("com.bitget.web3")         
+                    ]}
                 connectModal={{
                     title: "เชื่อมต่อกระเป๋า",
                     titleIcon: "https://dfi.fund/_next/static/media/DFastLogo_650x600.4f2ec315.svg",
